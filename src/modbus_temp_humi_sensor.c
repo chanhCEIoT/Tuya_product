@@ -195,11 +195,6 @@ void modbus_temp_humi_sensor_start(tuya_iot_client_t *client)
         return;
     }
 
-    THREAD_CFG_T thrd_param = {
-        .stackDepth = 1024 * 16,
-        .priority = 5,
-        .thrdname = "modbus_temp_humi",
-        .psram_mode = 0,
-    };
+    THREAD_CFG_T thrd_param = {1024 * 16, 5, "modbus_temp_humi", 0};
     tal_thread_create_and_start(&s_modbus_thread, NULL, NULL, modbus_temp_humi_task, NULL, &thrd_param);
 }

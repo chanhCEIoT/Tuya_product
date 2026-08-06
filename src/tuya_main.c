@@ -271,11 +271,6 @@ void tuya_app_main(void)
     // peripheral init
     switch_ctrl_init();
     modbus_temp_humi_sensor_start(&client);
-    THREAD_CFG_T thrd_param = {
-        .stackDepth = 1024 * 16,
-        .priority = 4,
-        .thrdname = "tuya_app_main",
-        .psram_mode = 0,
-    };
+    THREAD_CFG_T thrd_param = {1024*16, 4, "tuya_app_main", 0};
     tal_thread_create_and_start(&ty_app_thread, NULL, NULL, tuya_app_thread, NULL, &thrd_param);
 }
