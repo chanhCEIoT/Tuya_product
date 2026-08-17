@@ -1,0 +1,1 @@
+. ../TuyaOpen/export.sh

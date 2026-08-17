@@ -108,3 +108,6 @@
 /home/chanhserver/Tuya_product/.build/src/tuya_cloud_service/CMakeFiles/rebuild_cache.dir
 /home/chanhserver/Tuya_product/.build/src/tuya_p2p/CMakeFiles/edit_cache.dir
 /home/chanhserver/Tuya_product/.build/src/tuya_p2p/CMakeFiles/rebuild_cache.dir
+/home/chanhserver/Tuya_product/.build/boards/ESP32/ESP32/CMakeFiles/ESP32.dir
+/home/chanhserver/Tuya_product/.build/boards/ESP32/ESP32/CMakeFiles/edit_cache.dir
+/home/chanhserver/Tuya_product/.build/boards/ESP32/ESP32/CMakeFiles/rebuild_cache.dir

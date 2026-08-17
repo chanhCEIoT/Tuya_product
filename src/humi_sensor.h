@@ -7,7 +7,7 @@ extern "C" {
 
 #include "tuya_iot.h"
 
-void modbus_temp_humi_sensor_start(tuya_iot_client_t *client);
+void humi_sensor_start(tuya_iot_client_t *client);
 
 #ifdef __cplusplus
 }

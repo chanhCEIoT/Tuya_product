@@ -3,25 +3,10 @@
 #include "tal_api.h"
 #include "tkl_gpio.h"
 #include "tuya_cloud_types.h"
-#define SWITCH_MAX_CHANNELS 6
+#define SWITCH_MAX_CHANNELS 1
 
 #ifndef SWITCH_GPIO_CH1
-#define SWITCH_GPIO_CH1 TUYA_GPIO_NUM_1
-#endif
-#ifndef SWITCH_GPIO_CH2
-#define SWITCH_GPIO_CH2 TUYA_GPIO_NUM_2
-#endif
-#ifndef SWITCH_GPIO_CH3
-#define SWITCH_GPIO_CH3 TUYA_GPIO_NUM_41
-#endif
-#ifndef SWITCH_GPIO_CH4
-#define SWITCH_GPIO_CH4 TUYA_GPIO_NUM_42
-#endif
-#ifndef SWITCH_GPIO_CH5
-#define SWITCH_GPIO_CH5 TUYA_GPIO_NUM_45
-#endif
-#ifndef SWITCH_GPIO_CH6
-#define SWITCH_GPIO_CH6 TUYA_GPIO_NUM_46
+#define SWITCH_GPIO_CH1 TUYA_GPIO_NUM_16
 #endif
 
 #ifndef SWITCH_ACTIVE_LEVEL
@@ -30,11 +15,6 @@
 
 static const TUYA_GPIO_NUM_E sg_switch_pins[SWITCH_MAX_CHANNELS] = {
     SWITCH_GPIO_CH1,
-    SWITCH_GPIO_CH2,
-    SWITCH_GPIO_CH3,
-    SWITCH_GPIO_CH4,
-    SWITCH_GPIO_CH5,
-    SWITCH_GPIO_CH6,
 };
 
 static bool switch_state[SWITCH_MAX_CHANNELS] = {0};
@@ -77,23 +57,8 @@ void switch_ctrl_handle_dp(uint8_t dpid, bool value) {
     PR_DEBUG("Received DP ID: %u, value: %d", dpid, value);
 
     switch (dpid) {
-    case 105:
-        channel = 0;
-        break;
-    case 104:
-        channel = 1;
-        break;
-    case 122:
-        channel = 2;
-        break;
-    case 103:
-        channel = 3;
-        break;
-    case 102:
-        channel = 4;
-        break;
     case 101:
-        channel = 5;
+        channel = 0;
         break;
     default:
         PR_WARN("Unhandled DP ID: %u", dpid);

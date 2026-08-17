@@ -44,7 +44,8 @@
 		"/home/chanhserver/Tuya_product/.build/src/tal_wired/cmake_install.cmake",
 		"/home/chanhserver/Tuya_product/.build/src/tuya_ai_service/cmake_install.cmake",
 		"/home/chanhserver/Tuya_product/.build/src/tuya_cloud_service/cmake_install.cmake",
-		"/home/chanhserver/Tuya_product/.build/src/tuya_p2p/cmake_install.cmake"
+		"/home/chanhserver/Tuya_product/.build/src/tuya_p2p/cmake_install.cmake",
+		"/home/chanhserver/Tuya_product/.build/boards/ESP32/ESP32/cmake_install.cmake"
 	],
 	"Parallel" : false
 }

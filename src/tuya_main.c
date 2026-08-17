@@ -35,7 +35,7 @@
 #endif
 
 #include "reset_netcfg.h"
-#include "modbus_temp_humi_sensor.h"
+#include "humi_sensor.h"
 
 #if defined(ENABLE_QRCODE) && (ENABLE_QRCODE == 1)
 #include "qrencode_print.h"
@@ -270,7 +270,13 @@ void tuya_app_main(void)
 {
     // peripheral init
     switch_ctrl_init();
-    modbus_temp_humi_sensor_start(&client);
-    THREAD_CFG_T thrd_param = {1024*16, 4, "tuya_app_main", 0};
+    
+    humi_sensor_start(&client);
+    THREAD_CFG_T thrd_param = {
+        .stackDepth = 1024 * 16,
+        .priority = 4,
+        .thrdname = "tuya_app_main",
+        .psram_mode = 0,
+    };
     tal_thread_create_and_start(&ty_app_thread, NULL, NULL, tuya_app_thread, NULL, &thrd_param);
 }
