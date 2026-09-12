@@ -33,6 +33,7 @@ extern "C"
 
     // Hàm hiển thị LED 7 đoạn
     void HC595_Show_Number_Static(uint16_t number);
+    void HC595_Show_Humidity(float humidity);
 
 #ifdef __cplusplus
 }

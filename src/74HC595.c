@@ -139,3 +139,37 @@ void HC595_Show_Number_Static(uint16_t number)
     HC595_Send_Byte(NUM_MAP[digits[0]]); 
     HC595_Save();
 }
+
+void HC595_Show_Humidity(float humidity)
+{
+    uint16_t humidity_tenths;
+    uint16_t humidity_whole;
+    uint8_t display[4];
+
+    if (humidity < 0.0f) {
+        humidity = 0.0f;
+    } else if (humidity > 100.0f) {
+        humidity = 100.0f;
+    }
+
+    humidity_tenths = (uint16_t)(humidity * 10.0f + 0.5f);
+    humidity_whole = humidity_tenths / 10;
+
+    if (humidity_whole >= 100) {
+        display[0] = NUM_MAP[1];
+        display[1] = NUM_MAP[0];
+        display[2] = NUM_MAP_DOT[0];
+        display[3] = NUM_MAP[0];
+    } else {
+        display[0] = 0xFF;
+        display[1] = humidity_whole >= 10 ? NUM_MAP[humidity_whole / 10] : 0xFF;
+        display[2] = NUM_MAP_DOT[humidity_whole % 10];
+        display[3] = NUM_MAP[humidity_tenths % 10];
+    }
+
+    HC595_Send_Byte(display[3]);
+    HC595_Send_Byte(display[2]);
+    HC595_Send_Byte(display[1]);
+    HC595_Send_Byte(display[0]);
+    HC595_Save();
+}

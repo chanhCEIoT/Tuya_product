@@ -13,6 +13,7 @@
 #include "cJSON.h"
 #include "netmgr.h"
 #include "tal_api.h"
+#include "tal_wifi.h"
 #include "tkl_output.h"
 #include "tuya_config.h"
 #include "tuya_iot.h"
@@ -36,6 +37,9 @@
 
 #include "reset_netcfg.h"
 #include "humi_sensor.h"
+#include "dp_report.h"
+#include "dp_state.h"
+#include "status_led.h"
 
 #if defined(ENABLE_QRCODE) && (ENABLE_QRCODE == 1)
 #include "qrencode_print.h"
@@ -49,6 +53,177 @@
 /* Tuya device handle */
 tuya_iot_client_t client;
 tuya_iot_license_t license;
+
+static THREAD_HANDLE s_dp_restore_thread = NULL;
+static THREAD_HANDLE s_wifi_signal_thread = NULL;
+#define DP_RAW_STORAGE_PREFIX "dp_"
+
+static OPERATE_RET dp_report_all(void)
+{
+    const device_dp_values_t *dp_values = dp_state_get();
+    dp_obj_t dps[] = {
+        {.id = 101, .type = PROP_BOOL, .value.dp_bool = dp_values->switch_1},
+        {.id = 111, .type = PROP_BOOL, .value.dp_bool = dp_values->auto_work},
+        {.id = 116, .type = PROP_BOOL, .value.dp_bool = dp_values->auto_work_direction},
+        // {.id = 121, .type = PROP_VALUE, .value.dp_value = dp_values->current_humidity},
+        {.id = 131, .type = PROP_VALUE, .value.dp_value = dp_values->humi_high},
+        {.id = 132, .type = PROP_VALUE, .value.dp_value = dp_values->humi_low},
+        {.id = 141, .type = PROP_VALUE, .value.dp_value = (int)(dp_values->humi_offset * 10.0f)},
+        // {.id = 151, .type = PROP_ENUM, .value.dp_enum = dp_values->sensor_status},
+        // {.id = 190, .type = PROP_VALUE, .value.dp_value = dp_values->signal_strength},
+    };
+
+    return dp_report_obj(&client, NULL, dps, sizeof(dps) / sizeof(dps[0]), 0);
+}
+
+static int wifi_signal_strength_get(void)
+{
+    int8_t rssi = 0;
+
+    if (OPRT_OK != tal_wifi_station_get_conn_ap_rssi(&rssi)) {
+        return 0;
+    }
+
+    if (rssi <= -100) {
+        return 1;
+    }
+    if (rssi >= -30) {
+        return 100;
+    }
+
+    return 1 + ((int)rssi + 100) * 99 / 70;
+}
+
+static OPERATE_RET wifi_signal_strength_report(void)
+{
+    int signal_strength = wifi_signal_strength_get();
+    if (signal_strength == 0) {
+        return OPRT_COM_ERROR;
+    }
+
+    dp_state_set_signal_strength(signal_strength);
+
+    dp_obj_t dp = {
+        .id = 190,
+        .type = PROP_VALUE,
+        .value.dp_value = signal_strength,
+    };
+
+    return dp_report_obj(&client, NULL, &dp, 1, 0);
+}
+
+static void wifi_signal_task(void *arg)
+{
+    (void)arg;
+
+    while (1) {
+        if (tuya_iot_is_connected()) {
+            OPERATE_RET rt = wifi_signal_strength_report();
+            if (OPRT_OK != rt) {
+                PR_DEBUG("WiFi signal report failed, ret=%d", rt);
+            }
+        }
+        tal_system_sleep(2000);
+    }
+}
+
+static void wifi_signal_start(void)
+{
+    THREAD_CFG_T thread_cfg = {
+        .stackDepth = 1024 * 2,
+        .priority = THREAD_PRIO_1,
+        .thrdname = "wifi_signal_task",
+    };
+
+    OPERATE_RET rt = tal_thread_create_and_start(
+        &s_wifi_signal_thread,
+        NULL,
+        NULL,
+        wifi_signal_task,
+        NULL,
+        &thread_cfg
+    );
+    if (OPRT_OK != rt) {
+        PR_ERR("Failed to create WiFi signal task, ret=%d", rt);
+        s_wifi_signal_thread = NULL;
+    }
+}
+
+static OPERATE_RET dp_report_stored_raw(void)
+{
+    char key[sizeof(DP_RAW_STORAGE_PREFIX) + 4] = {0};
+    uint8_t *stored_value = NULL;
+    size_t stored_length = 0;
+
+    snprintf(key, sizeof(key), DP_RAW_STORAGE_PREFIX "160");
+    if (OPRT_OK != tal_kv_get(key, &stored_value, &stored_length) || 0 == stored_length) {
+        return OPRT_OK;
+    }
+
+    dp_raw_t *dp = tal_malloc(sizeof(dp_raw_t) + stored_length);
+    if (NULL == dp) {
+        tal_kv_free(stored_value);
+        return OPRT_MALLOC_FAILED;
+    }
+
+    dp->id = 160;
+    dp->len = stored_length;
+    memcpy(dp->data, stored_value, stored_length);
+    tal_kv_free(stored_value);
+
+    OPERATE_RET rt = dp_report_raw(&client, NULL, dp, 5000);
+    tal_free(dp);
+    return rt;
+}
+
+static void dp_restore_task(void *arg)
+{
+    (void)arg;
+
+    dp_state_load();
+    while (!tuya_iot_is_connected()) {
+        tal_system_sleep(2000);
+    }
+
+    OPERATE_RET rt = dp_report_all();
+    if (OPRT_OK != rt) {
+        PR_ERR("Failed to report restored DPs, ret=%d", rt);
+    }
+    rt = dp_report_stored_raw();
+    if (OPRT_OK != rt) {
+        PR_ERR("Failed to report restored raw DPs, ret=%d", rt);
+    }
+
+    THREAD_HANDLE thread = s_dp_restore_thread;
+    s_dp_restore_thread = NULL;
+    tal_thread_delete(thread);
+}
+
+static void dp_restore_start(void)
+{
+    if (NULL != s_dp_restore_thread) {
+        return;
+    }
+
+    THREAD_CFG_T thread_cfg = {
+        .stackDepth = 1024 * 2,
+        .priority = THREAD_PRIO_1,
+        .thrdname = "dp_restore_task",
+    };
+
+    OPERATE_RET rt = tal_thread_create_and_start(
+        &s_dp_restore_thread,
+        NULL,
+        NULL,
+        dp_restore_task,
+        NULL,
+        &thread_cfg
+    );
+    if (OPRT_OK != rt) {
+        PR_ERR("Failed to create DP restore task, ret=%d", rt);
+        s_dp_restore_thread = NULL;
+    }
+}
 
 void user_log_output_cb(const char *str)
 {
@@ -81,6 +256,15 @@ void user_event_handler_on(tuya_iot_client_t *client, tuya_event_msg_t *event)
     switch (event->id) {
     case TUYA_EVENT_BIND_START:
         PR_INFO("Device Bind Start!");
+        status_led_set_paired(false);
+        status_led_set_pairing(true);
+        break;
+
+    case TUYA_EVENT_ACTIVATE_SUCCESSED:
+        PR_INFO("Device activation completed!");
+        status_led_set_paired(true);
+        status_led_set_pairing(false);
+        status_led_update();
         break;
 
     /* Print the QRCode for Tuya APP bind */
@@ -95,6 +279,18 @@ void user_event_handler_on(tuya_iot_client_t *client, tuya_event_msg_t *event)
     /* MQTT with tuya cloud is connected, device online */
     case TUYA_EVENT_MQTT_CONNECTED:
         PR_INFO("Device MQTT Connected!");
+        if (tuya_iot_activated(client)) {
+            status_led_set_paired(true);
+            status_led_set_pairing(false);
+            status_led_update();
+        }
+        break;
+
+    case TUYA_EVENT_BINDED_NOTIFY:
+        PR_INFO("Device bound notification received!");
+        status_led_set_paired(true);
+        status_led_set_pairing(false);
+        status_led_update();
         break;
 
     /* RECV upgrade request */
@@ -109,6 +305,14 @@ void user_event_handler_on(tuya_iot_client_t *client, tuya_event_msg_t *event)
         break;
     case TUYA_EVENT_RESET:
         PR_INFO("Device Reset:%d", event->value.asInteger);
+        if (event->value.asInteger == TUYA_RESET_TYPE_REMOTE_UNACTIVE ||
+            event->value.asInteger == TUYA_RESET_TYPE_LOCAL_UNACTIVE ||
+            event->value.asInteger == TUYA_RESET_TYPE_FACTORY ||
+            event->value.asInteger == TUYA_RESET_TYPE_REMOTE_FACTORY ||
+            event->value.asInteger == TUYA_RESET_TYPE_DATA_FACTORY) {
+            status_led_set_paired(false);
+            status_led_set_pairing(true);
+        }
         break;
 
     /* RECV OBJ DP */
@@ -123,6 +327,7 @@ void user_event_handler_on(tuya_iot_client_t *client, tuya_event_msg_t *event)
         for (index = 0; index < dpobj->dpscnt; index++) {
             dp_obj_t *dp = dpobj->dps + index;
             PR_DEBUG("idx:%d dpid:%d type:%d ts:%u", index, dp->id, dp->type, dp->time_stamp);
+            dp_state_update(dp);
             switch (dp->type) {
             case PROP_BOOL: {
                 PR_DEBUG("bool value:%d", dp->value.dp_bool);
@@ -153,7 +358,7 @@ void user_event_handler_on(tuya_iot_client_t *client, tuya_event_msg_t *event)
             } // end of switch
         }
 
-        tuya_iot_dp_obj_report(client, dpobj->devid, dpobj->dps, dpobj->dpscnt, 0);
+        dp_report_obj(client, dpobj->devid, dpobj->dps, dpobj->dpscnt, 0);
 
     } break;
 
@@ -168,11 +373,12 @@ void user_event_handler_on(tuya_iot_client_t *client, tuya_event_msg_t *event)
         uint32_t index = 0;
         dp_raw_t *dp = &dpraw->dp;
         PR_DEBUG("dpid:%d type:RAW len:%d data:", dp->id, dp->len);
+        dp_state_store_raw(dp);
         for (index = 0; index < dp->len; index++) {
             PR_DEBUG_RAW("%02x", dp->data[index]);
         }
 
-        tuya_iot_dp_raw_report(client, dpraw->devid, &dpraw->dp, 3);
+        dp_report_raw(client, dpraw->devid, &dpraw->dp, 3);
 
     } break;
 
@@ -228,6 +434,21 @@ void user_main(void)
                                     .network_check = user_network_check,
                                 });
     assert(rt == OPRT_OK);
+    rt = dp_report_init();
+    if (OPRT_OK != rt) {
+        PR_ERR("Failed to initialize DP report mutex, ret=%d", rt);
+    }
+    switch_ctrl_set_client(&client);
+    status_led_init();
+    if (tuya_iot_activated(&client)) {
+        status_led_set_paired(true);
+        status_led_set_pairing(false);
+    } else {
+        status_led_set_paired(false);
+        status_led_set_pairing(true);
+    }
+
+    dp_state_load();
 
     // network init
     netmgr_type_e type = 0;
@@ -249,6 +470,8 @@ void user_main(void)
     PR_DEBUG("tuya_iot_init success");
     /* Start tuya iot task */
     tuya_iot_start(&client);
+    dp_restore_start();
+    wifi_signal_start();
     reset_netconfig_check();
 
     while(1){
