@@ -63,20 +63,27 @@ void switch_ctrl_set(uint8_t channel, bool on) {
     PR_DEBUG("Switch channel %d set to %s\n", channel, on ? "ON" : "OFF");
 
     if (changed && NULL != switch_client && tuya_iot_activated(switch_client) && tuya_iot_is_connected()) {
-        dp_obj_t dp = {
-            .id = 101,
-            .type = PROP_BOOL,
-            .value.dp_bool = on,
-        };
+        // Dynamically allocate the DP object
+        dp_obj_t *dp = (dp_obj_t *)tal_malloc(sizeof(dp_obj_t));
+        if (dp == NULL) {
+            PR_ERR("Failed to allocate memory for DP report");
+            return;
+        }
+        
+        dp->id = 101;
+        dp->type = PROP_BOOL;
+        dp->value.dp_bool = on;
+
         OPERATE_RET rt = dp_report_obj(
             switch_client,
             NULL,
-            &dp,
+            dp,
             1,
             0
         );
         if (OPRT_OK != rt) {
             PR_ERR("Failed to report switch status, ret=%d", rt);
+            tal_free(dp); // Free it manually if the queue submission fails
         }
     }
 }
