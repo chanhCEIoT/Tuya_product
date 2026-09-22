@@ -470,6 +470,7 @@ void user_main(void)
     PR_DEBUG("tuya_iot_init success");
     /* Start tuya iot task */
     tuya_iot_start(&client);
+    humi_sensor_start(&client);
     dp_restore_start();
     wifi_signal_start();
     reset_netconfig_check();
@@ -493,8 +494,7 @@ void tuya_app_main(void)
 {
     // peripheral init
     switch_ctrl_init();
-    
-    humi_sensor_start(&client);
+
     THREAD_CFG_T thrd_param = {
         .stackDepth = 1024 * 16,
         .priority = 4,

@@ -3,23 +3,16 @@
 #include <string.h>
 #include <stdio.h>
 #include "tal_api.h"
-#include "tkl_adc.h"
+#include "ads1115.h"
 #include "tuya_iot_dp.h"
 #include "74HC595.h"
 #include "switch_ctrl.h"
 #include "dp_state.h"
 #include "dp_report.h"
 #include <math.h>
-#define ADC_PORT        TUYA_ADC_NUM_0
-#define ADC_GPIO        32
-#define ADC_CHANNEL     4
-#define ADC_MODE        TUYA_ADC_SINGLE
-#define ADC_TYPE        TUYA_ADC_EXTERNAL_SAMPLE_VOL
-#define ADC_WIDTH       12
-#define ADC_CONV_CNT    1
 #define ADC_DPID        121
-#define KALMAN_PROCESS_NOISE 1.0f
-#define KALMAN_MEASUREMENT_NOISE 1000.0f
+#define KALMAN_PROCESS_NOISE 0.2f
+#define KALMAN_MEASUREMENT_NOISE 50.0f
 #define HUMIDITY_STEP 0.05f
 #define SCALE_FACTOR 10
 static float adc_avg = 0.0f;
@@ -29,22 +22,9 @@ static bool kalman_initialized = false;
 static tuya_iot_client_t *s_adc_client = NULL;
 static THREAD_HANDLE s_adc_thread = NULL;
 
-static TUYA_ADC_BASE_CFG_T s_adc_cfg = {
-    .ch_list.data = (1U << ADC_CHANNEL),
-    .ch_nums      = 1,
-    .width        = ADC_WIDTH,
-    .mode         = ADC_MODE,
-    .type         = ADC_TYPE,
-    .conv_cnt     = ADC_CONV_CNT,
-    
-};
-
 static OPERATE_RET read_adc(int32_t *adc_value)
 {
-    if (NULL == adc_value) {
-        return OPRT_INVALID_PARM;
-    }
-    return tkl_adc_read_single_channel(ADC_PORT, ADC_CHANNEL, adc_value);
+    return ads1115_read_adc0(adc_value);
 }
 
 static OPERATE_RET adc_report_value(int32_t adc_val)
@@ -100,17 +80,12 @@ static void adc_sensor_task(void *arg)
 
     PR_INFO("ADC task started");
 
-    PR_INFO(
-        "Initializing ADC: GPIO=%d, port=%d, channel=%d",
-        ADC_GPIO,
-        ADC_PORT,
-        ADC_CHANNEL
-    );
+    PR_INFO("Initializing ADS1115 AIN0");
 
-    rt = tkl_adc_init(ADC_PORT, &s_adc_cfg);
+    rt = ads1115_init();
     if (OPRT_OK != rt) {
         PR_ERR(
-            "tkl_adc_init failed, ret=%d",
+            "ADS1115 I2C init failed, ret=%d; check that SCL/SDA are output-capable GPIOs",
             rt
         );
         s_adc_thread = NULL;
@@ -140,8 +115,8 @@ static void adc_sensor_task(void *arg)
             switch_ctrl_auto_humidity(humi_value);
             
             HC595_Show_Number_Static((uint16_t)(humi_value * 100));
-            PR_INFO("ADC channel %d raw = %ld, filtered = %.2f, humidity = %.2f",
-                    ADC_CHANNEL, (long)adc_val, adc_avg, humi_value);
+                PR_INFO("ADS1115 AIN0 raw = %ld, filtered = %.2f, humidity = %.2f",
+                    (long)adc_val, adc_avg, humi_value);
             if (NULL != s_adc_client) {
                 counter++;
                 if(counter > 20){
@@ -151,10 +126,9 @@ static void adc_sensor_task(void *arg)
                 }
             }
         } 
-        else {PR_ERR("tkl_adc_read_single_channel failed, ret=%d",rt);}
-        tal_system_sleep(200);
+        else {PR_ERR("ADS1115 AIN0 read failed, ret=%d",rt);}
+        tal_system_sleep(100);
     }
-    tkl_adc_deinit(ADC_PORT);
     s_adc_thread = NULL;
 }
 

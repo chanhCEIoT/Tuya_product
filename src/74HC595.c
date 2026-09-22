@@ -12,7 +12,6 @@ int light_def = 0b00000000;
 #define HC595_Data_Low() tkl_gpio_write(SDA_GPIO_PIN, 0)  
 #define HC595_Data_High() tkl_gpio_write(SDA_GPIO_PIN, 1) 
 
-static const char *TAG = "74HC595";
 
 void HC595_Save(void)
 {
