@@ -16,8 +16,9 @@ typedef struct {
     int signal_strength;
 } device_dp_values_t;
 
+OPERATE_RET dp_state_init(void);
 void dp_state_load(void);
-const device_dp_values_t *dp_state_get(void);
+void dp_state_get(device_dp_values_t *values);
 float tuya_humidity_offset_get(void);
 void dp_state_set_signal_strength(int signal_strength);
 bool dp_state_update(const dp_obj_t *dp);

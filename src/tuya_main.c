@@ -21,7 +21,6 @@
 #include "tal_cli.h"
 #include "tuya_authorize.h"
 #include "switch_ctrl.h"
-#include <assert.h>
 #if defined(ENABLE_WIFI) && (ENABLE_WIFI == 1)
 #include "netconn_wifi.h"
 #endif
@@ -60,15 +59,16 @@ static THREAD_HANDLE s_wifi_signal_thread = NULL;
 
 static OPERATE_RET dp_report_all(void)
 {
-    const device_dp_values_t *dp_values = dp_state_get();
+    device_dp_values_t dp_values = {0};
+    dp_state_get(&dp_values);
     dp_obj_t dps[] = {
-        {.id = 101, .type = PROP_BOOL, .value.dp_bool = dp_values->switch_1},
-        {.id = 111, .type = PROP_BOOL, .value.dp_bool = dp_values->auto_work},
-        {.id = 116, .type = PROP_BOOL, .value.dp_bool = dp_values->auto_work_direction},
+        {.id = 101, .type = PROP_BOOL, .value.dp_bool = dp_values.switch_1},
+        {.id = 111, .type = PROP_BOOL, .value.dp_bool = dp_values.auto_work},
+        {.id = 116, .type = PROP_BOOL, .value.dp_bool = dp_values.auto_work_direction},
         // {.id = 121, .type = PROP_VALUE, .value.dp_value = dp_values->current_humidity},
-        {.id = 131, .type = PROP_VALUE, .value.dp_value = dp_values->humi_high},
-        {.id = 132, .type = PROP_VALUE, .value.dp_value = dp_values->humi_low},
-        {.id = 141, .type = PROP_VALUE, .value.dp_value = (int)(dp_values->humi_offset * 10.0f)},
+        {.id = 131, .type = PROP_VALUE, .value.dp_value = dp_values.humi_high},
+        {.id = 132, .type = PROP_VALUE, .value.dp_value = dp_values.humi_low},
+        {.id = 141, .type = PROP_VALUE, .value.dp_value = (int)(dp_values.humi_offset * 10.0f)},
         // {.id = 151, .type = PROP_ENUM, .value.dp_enum = dp_values->sensor_status},
         // {.id = 190, .type = PROP_VALUE, .value.dp_value = dp_values->signal_strength},
     };
@@ -130,7 +130,7 @@ static void wifi_signal_task(void *arg)
 static void wifi_signal_start(void)
 {
     THREAD_CFG_T thread_cfg = {
-        .stackDepth = 1024 * 2,
+        .stackDepth = 1024 * 4,
         .priority = THREAD_PRIO_1,
         .thrdname = "wifi_signal_task",
     };
@@ -156,8 +156,17 @@ static OPERATE_RET dp_report_stored_raw(void)
     size_t stored_length = 0;
 
     snprintf(key, sizeof(key), DP_RAW_STORAGE_PREFIX "160");
-    if (OPRT_OK != tal_kv_get(key, &stored_value, &stored_length) || 0 == stored_length) {
+    OPERATE_RET rt = tal_kv_get(key, &stored_value, &stored_length);
+    if (OPRT_OK != rt || NULL == stored_value || 0U == stored_length) {
+        if (NULL != stored_value) {
+            tal_kv_free(stored_value);
+        }
         return OPRT_OK;
+    }
+
+    if (stored_length > UINT16_MAX || stored_length > SIZE_MAX - sizeof(dp_raw_t)) {
+        tal_kv_free(stored_value);
+        return OPRT_BUFFER_NOT_ENOUGH;
     }
 
     dp_raw_t *dp = tal_malloc(sizeof(dp_raw_t) + stored_length);
@@ -167,11 +176,11 @@ static OPERATE_RET dp_report_stored_raw(void)
     }
 
     dp->id = 160;
-    dp->len = stored_length;
+    dp->len = (uint16_t)stored_length;
     memcpy(dp->data, stored_value, stored_length);
     tal_kv_free(stored_value);
 
-    OPERATE_RET rt = dp_report_raw(&client, NULL, dp, 5000);
+    rt = dp_report_raw(&client, NULL, dp, 5000);
     tal_free(dp);
     return rt;
 }
@@ -206,7 +215,7 @@ static void dp_restore_start(void)
     }
 
     THREAD_CFG_T thread_cfg = {
-        .stackDepth = 1024 * 2,
+        .stackDepth = 1024 * 4,
         .priority = THREAD_PRIO_1,
         .thrdname = "dp_restore_task",
     };
@@ -230,16 +239,33 @@ void user_log_output_cb(const char *str)
     tkl_log_output(str);
 }
 
+static const char *upgrade_string(cJSON *upgrade, const char *key)
+{
+    cJSON *item = cJSON_GetObjectItemCaseSensitive(upgrade, key);
+    if (NULL == item || !cJSON_IsString(item) || NULL == item->valuestring) {
+        return "<missing>";
+    }
+
+    return item->valuestring;
+}
+
 void user_upgrade_notify_on(tuya_iot_client_t *client, cJSON *upgrade)
 {
+    (void)client;
+    if (NULL == upgrade) {
+        PR_WARN("Ignoring empty OTA upgrade notification");
+        return;
+    }
+
+    cJSON *type = cJSON_GetObjectItemCaseSensitive(upgrade, "type");
     PR_INFO("----- Upgrade information -----");
-    PR_INFO("OTA Channel: %d", cJSON_GetObjectItem(upgrade, "type")->valueint);
-    PR_INFO("Version: %s", cJSON_GetObjectItem(upgrade, "version")->valuestring);
-    PR_INFO("Size: %s", cJSON_GetObjectItem(upgrade, "size")->valuestring);
-    PR_INFO("MD5: %s", cJSON_GetObjectItem(upgrade, "md5")->valuestring);
-    PR_INFO("HMAC: %s", cJSON_GetObjectItem(upgrade, "hmac")->valuestring);
-    PR_INFO("URL: %s", cJSON_GetObjectItem(upgrade, "url")->valuestring);
-    PR_INFO("HTTPS URL: %s", cJSON_GetObjectItem(upgrade, "httpsUrl")->valuestring);
+    PR_INFO("OTA Channel: %d", cJSON_IsNumber(type) ? type->valueint : -1);
+    PR_INFO("Version: %s", upgrade_string(upgrade, "version"));
+    PR_INFO("Size: %s", upgrade_string(upgrade, "size"));
+    PR_INFO("MD5: %s", upgrade_string(upgrade, "md5"));
+    PR_INFO("HMAC: %s", upgrade_string(upgrade, "hmac"));
+    PR_INFO("URL: %s", upgrade_string(upgrade, "url"));
+    PR_INFO("HTTPS URL: %s", upgrade_string(upgrade, "httpsUrl"));
 }
 
 /**
@@ -251,6 +277,11 @@ void user_upgrade_notify_on(tuya_iot_client_t *client, cJSON *upgrade)
  */
 void user_event_handler_on(tuya_iot_client_t *client, tuya_event_msg_t *event)
 {
+    if (NULL == client || NULL == event) {
+        PR_ERR("Ignoring invalid Tuya event");
+        return;
+    }
+
     PR_DEBUG("Tuya Event ID:%d(%s)", event->id, EVENT_ID2STR(event->id));
     PR_INFO("Device Free heap %d", tal_system_get_free_heap_size());
     switch (event->id) {
@@ -271,8 +302,15 @@ void user_event_handler_on(tuya_iot_client_t *client, tuya_event_msg_t *event)
     case TUYA_EVENT_DIRECT_MQTT_CONNECTED: {
 #if defined(ENABLE_QRCODE) && (ENABLE_QRCODE == 1)
         char buffer[255];
-        sprintf(buffer, "https://smartapp.tuya.com/s/p?p=%s&uuid=%s&v=2.0", TUYA_PRODUCT_ID, license.uuid);
-        qrcode_string_output(buffer, user_log_output_cb, 0);
+        int written = snprintf(buffer, sizeof(buffer),
+                               "https://smartapp.tuya.com/s/p?p=%s&uuid=%s&v=2.0",
+                               TUYA_PRODUCT_ID,
+                               NULL != license.uuid ? license.uuid : "");
+        if (written < 0 || (size_t)written >= sizeof(buffer)) {
+            PR_ERR("Pairing QR code URL is too long");
+        } else {
+            qrcode_string_output(buffer, user_log_output_cb, 0);
+        }
 #endif
     } break;
 
@@ -318,6 +356,10 @@ void user_event_handler_on(tuya_iot_client_t *client, tuya_event_msg_t *event)
     /* RECV OBJ DP */
     case TUYA_EVENT_DP_RECEIVE_OBJ: {
         dp_obj_recv_t *dpobj = event->value.dpobj;
+        if (NULL == dpobj) {
+            PR_ERR("Ignoring invalid object DP event");
+            break;
+        }
         PR_DEBUG("SOC Rev DP Cmd t1:%d t2:%d CNT:%u", dpobj->cmd_tp, dpobj->dtt_tp, dpobj->dpscnt);
         if (dpobj->devid != NULL) {
             PR_DEBUG("devid.%s", dpobj->devid);
@@ -365,6 +407,10 @@ void user_event_handler_on(tuya_iot_client_t *client, tuya_event_msg_t *event)
     /* RECV RAW DP */
     case TUYA_EVENT_DP_RECEIVE_RAW: {
         dp_raw_recv_t *dpraw = event->value.dpraw;
+        if (NULL == dpraw) {
+            PR_ERR("Ignoring empty raw DP event");
+            break;
+        }
         PR_DEBUG("SOC Rev DP Cmd t1:%d t2:%d", dpraw->cmd_tp, dpraw->dtt_tp);
         if (dpraw->devid != NULL) {
             PR_DEBUG("devid.%s", dpraw->devid);
@@ -433,10 +479,19 @@ void user_main(void)
                                     .event_handler = user_event_handler_on,
                                     .network_check = user_network_check,
                                 });
-    assert(rt == OPRT_OK);
+    if (OPRT_OK != rt) {
+        PR_ERR("Tuya IoT initialization failed, ret=%d", rt);
+        return;
+    }
     rt = dp_report_init();
     if (OPRT_OK != rt) {
         PR_ERR("Failed to initialize DP report mutex, ret=%d", rt);
+        return;
+    }
+    rt = dp_state_init();
+    if (OPRT_OK != rt) {
+        PR_ERR("Failed to initialize DP state mutex, ret=%d", rt);
+        return;
     }
     switch_ctrl_set_client(&client);
     status_led_init();
@@ -501,5 +556,16 @@ void tuya_app_main(void)
         .thrdname = "tuya_app_main",
         .psram_mode = 0,
     };
-    tal_thread_create_and_start(&ty_app_thread, NULL, NULL, tuya_app_thread, NULL, &thrd_param);
+    OPERATE_RET rt = tal_thread_create_and_start(
+        &ty_app_thread,
+        NULL,
+        NULL,
+        tuya_app_thread,
+        NULL,
+        &thrd_param
+    );
+    if (OPRT_OK != rt) {
+        ty_app_thread = NULL;
+        PR_ERR("Failed to create Tuya app task, ret=%d", rt);
+    }
 }

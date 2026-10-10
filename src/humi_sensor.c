@@ -12,7 +12,7 @@
 #include <math.h>
 #define ADC_DPID        121
 #define KALMAN_PROCESS_NOISE 0.2f
-#define KALMAN_MEASUREMENT_NOISE 50.0f
+#define KALMAN_MEASUREMENT_NOISE 100.0f
 #define HUMIDITY_STEP 0.05f
 #define SCALE_FACTOR 10
 static float adc_avg = 0.0f;

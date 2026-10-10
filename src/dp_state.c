@@ -19,6 +19,16 @@
 #define DP_DEFAULT_SIGNAL_STRENGTH 0
 
 static device_dp_values_t s_dp_values = {0};
+static MUTEX_HANDLE s_dp_state_mutex = NULL;
+
+OPERATE_RET dp_state_init(void)
+{
+    if (NULL != s_dp_state_mutex) {
+        return OPRT_OK;
+    }
+
+    return tal_mutex_create_init(&s_dp_state_mutex);
+}
 
 static void dp_store_value(uint8_t id, int value)
 {
@@ -51,67 +61,97 @@ static bool dp_load_value(uint8_t id, int *value)
 
 void dp_state_load(void)
 {
+    device_dp_values_t values = {
+        .switch_1 = DP_DEFAULT_SWITCH_1,
+        .auto_work = DP_DEFAULT_AUTO_WORK,
+        .auto_work_direction = DP_DEFAULT_AUTO_DIRECTION,
+        .current_humidity = DP_DEFAULT_CURRENT_HUMIDITY,
+        .humi_high = DP_DEFAULT_HUMI_HIGH,
+        .humi_low = DP_DEFAULT_HUMI_LOW,
+        .humi_offset = DP_DEFAULT_HUMI_OFFSET,
+        .sensor_status = DP_DEFAULT_SENSOR_STATUS,
+        .signal_strength = DP_DEFAULT_SIGNAL_STRENGTH,
+    };
     int value = 0;
 
-    s_dp_values.switch_1 = DP_DEFAULT_SWITCH_1;
+    if (NULL == s_dp_state_mutex || OPRT_OK != tal_mutex_lock(s_dp_state_mutex)) {
+        PR_ERR("Failed to lock DP state during load");
+        return;
+    }
+
     if (dp_load_value(101, &value)) {
-        s_dp_values.switch_1 = value != 0;
+        values.switch_1 = value != 0;
     }
 
-    s_dp_values.auto_work = DP_DEFAULT_AUTO_WORK;
     if (dp_load_value(111, &value)) {
-        s_dp_values.auto_work = value != 0;
+        values.auto_work = value != 0;
     }
 
-    s_dp_values.auto_work_direction = DP_DEFAULT_AUTO_DIRECTION;
     if (dp_load_value(116, &value)) {
-        s_dp_values.auto_work_direction = value != 0;
+        values.auto_work_direction = value != 0;
     }
 
-    s_dp_values.current_humidity = DP_DEFAULT_CURRENT_HUMIDITY;
-    dp_load_value(121, &s_dp_values.current_humidity);
-    s_dp_values.humi_high = DP_DEFAULT_HUMI_HIGH;
-    dp_load_value(131, &s_dp_values.humi_high);
-    s_dp_values.humi_low = DP_DEFAULT_HUMI_LOW;
-    dp_load_value(132, &s_dp_values.humi_low);
+    dp_load_value(121, &values.current_humidity);
+    dp_load_value(131, &values.humi_high);
+    dp_load_value(132, &values.humi_low);
 
-    s_dp_values.humi_offset = DP_DEFAULT_HUMI_OFFSET;
     if (dp_load_value(141, &value)) {
-        s_dp_values.humi_offset = (float)value / 10.0f;
+        values.humi_offset = (float)value / 10.0f;
     }
 
-    s_dp_values.sensor_status = DP_DEFAULT_SENSOR_STATUS;
     if (dp_load_value(151, &value)) {
-        s_dp_values.sensor_status = (uint32_t)value;
+        values.sensor_status = (uint32_t)value;
     }
 
-    s_dp_values.signal_strength = DP_DEFAULT_SIGNAL_STRENGTH;
-    dp_load_value(190, &s_dp_values.signal_strength);
+    dp_load_value(190, &values.signal_strength);
 
-    switch_ctrl_set(0, s_dp_values.switch_1);
-    switch_ctrl_set_auto_config(s_dp_values.auto_work,
-                                s_dp_values.auto_work_direction,
-                                s_dp_values.humi_high,
-                                s_dp_values.humi_low);
+    s_dp_values = values;
+    tal_mutex_unlock(s_dp_state_mutex);
+
+    switch_ctrl_set(0, values.switch_1);
+    switch_ctrl_set_auto_config(values.auto_work,
+                                values.auto_work_direction,
+                                values.humi_high,
+                                values.humi_low);
 }
 
-const device_dp_values_t *dp_state_get(void)
+void dp_state_get(device_dp_values_t *values)
 {
-    return &s_dp_values;
+    if (NULL == values || NULL == s_dp_state_mutex ||
+        OPRT_OK != tal_mutex_lock(s_dp_state_mutex)) {
+        return;
+    }
+
+    *values = s_dp_values;
+    tal_mutex_unlock(s_dp_state_mutex);
 }
 
 float tuya_humidity_offset_get(void)
 {
-    return s_dp_values.humi_offset;
+    float offset = 0.0f;
+
+    if (NULL == s_dp_state_mutex || OPRT_OK != tal_mutex_lock(s_dp_state_mutex)) {
+        return offset;
+    }
+
+    offset = s_dp_values.humi_offset;
+    tal_mutex_unlock(s_dp_state_mutex);
+    return offset;
 }
 
 void dp_state_set_signal_strength(int signal_strength)
 {
+    if (NULL == s_dp_state_mutex || OPRT_OK != tal_mutex_lock(s_dp_state_mutex)) {
+        return;
+    }
+
     if (s_dp_values.signal_strength == signal_strength) {
+        tal_mutex_unlock(s_dp_state_mutex);
         return;
     }
 
     s_dp_values.signal_strength = signal_strength;
+    tal_mutex_unlock(s_dp_state_mutex);
     dp_store_value(190, signal_strength);
 }
 
@@ -123,65 +163,85 @@ bool dp_state_update(const dp_obj_t *dp)
         return false;
     }
 
+    bool valid_type = false;
     switch (dp->id) {
     case 101:
-        if (PROP_BOOL != dp->type) return false;
+    case 111:
+    case 116:
+        valid_type = PROP_BOOL == dp->type;
+        break;
+    case 121:
+    case 131:
+    case 132:
+    case 141:
+    case 190:
+        valid_type = PROP_VALUE == dp->type;
+        break;
+    case 151:
+        valid_type = PROP_ENUM == dp->type;
+        break;
+    default:
+        return false;
+    }
+    if (!valid_type || NULL == s_dp_state_mutex ||
+        OPRT_OK != tal_mutex_lock(s_dp_state_mutex)) {
+        return false;
+    }
+
+    switch (dp->id) {
+    case 101:
         s_dp_values.switch_1 = dp->value.dp_bool;
         dp_store_value(dp->id, dp->value.dp_bool);
         break;
     case 111:
-        if (PROP_BOOL != dp->type) return false;
         s_dp_values.auto_work = dp->value.dp_bool;
         dp_store_value(dp->id, dp->value.dp_bool);
         auto_config_changed = true;
         break;
     case 116:
-        if (PROP_BOOL != dp->type) return false;
         s_dp_values.auto_work_direction = dp->value.dp_bool;
         dp_store_value(dp->id, dp->value.dp_bool);
         auto_config_changed = true;
         break;
     case 121:
-        if (PROP_VALUE != dp->type) return false;
         s_dp_values.current_humidity = dp->value.dp_value;
         dp_store_value(dp->id, dp->value.dp_value);
         break;
     case 131:
-        if (PROP_VALUE != dp->type) return false;
         s_dp_values.humi_high = dp->value.dp_value;
         dp_store_value(dp->id, dp->value.dp_value);
         auto_config_changed = true;
         break;
     case 132:
-        if (PROP_VALUE != dp->type) return false;
         s_dp_values.humi_low = dp->value.dp_value;
         dp_store_value(dp->id, dp->value.dp_value);
         auto_config_changed = true;
         break;
     case 141:
-        if (PROP_VALUE != dp->type) return false;
         s_dp_values.humi_offset = (float)dp->value.dp_value / 10.0f;
         dp_store_value(dp->id, dp->value.dp_value);
         break;
     case 151:
-        if (PROP_ENUM != dp->type) return false;
         s_dp_values.sensor_status = dp->value.dp_enum;
         dp_store_value(dp->id, (int)dp->value.dp_enum);
         break;
     case 190:
-        if (PROP_VALUE != dp->type) return false;
         s_dp_values.signal_strength = dp->value.dp_value;
         dp_store_value(dp->id, dp->value.dp_value);
         break;
     default:
+        tal_mutex_unlock(s_dp_state_mutex);
         return false;
     }
 
+    device_dp_values_t values = s_dp_values;
+    tal_mutex_unlock(s_dp_state_mutex);
+
     if (auto_config_changed) {
-        switch_ctrl_set_auto_config(s_dp_values.auto_work,
-                                    s_dp_values.auto_work_direction,
-                                    s_dp_values.humi_high,
-                                    s_dp_values.humi_low);
+        switch_ctrl_set_auto_config(values.auto_work,
+                                    values.auto_work_direction,
+                                    values.humi_high,
+                                    values.humi_low);
     }
     PR_INFO("DP %u value updated", dp->id);
     return true;

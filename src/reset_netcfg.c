@@ -39,22 +39,31 @@
 
 static int reset_count_read(uint8_t *count)
 {
-    int rt = OPRT_OK;
-
     uint8_t *read_buf = NULL;
-    size_t read_len;
+    size_t read_len = 0U;
 
-    TUYA_CALL_ERR_RETURN(tal_kv_get(RESET_NETCNT_NAME, &read_buf, &read_len));
+    if (NULL == count) {
+        return OPRT_INVALID_PARM;
+    }
+    *count = 0U;
+
+    int rt = tal_kv_get(RESET_NETCNT_NAME, &read_buf, &read_len);
+    if (OPRT_OK != rt) {
+        return rt;
+    }
+    if (NULL == read_buf || 0U == read_len) {
+        if (NULL != read_buf) {
+            tal_kv_free(read_buf);
+        }
+        return OPRT_OK;
+    }
+
     *count = read_buf[0];
 
     PR_DEBUG("reset count is %d", *count);
 
-    if (NULL != read_buf) {
-        tal_kv_free(read_buf);
-        read_buf = NULL;
-    }
-
-    return rt;
+    tal_kv_free(read_buf);
+    return OPRT_OK;
 }
 
 static int reset_count_write(uint8_t count)
@@ -65,7 +74,9 @@ static int reset_count_write(uint8_t count)
 
 static void reset_netconfig_timer(TIMER_ID timer_id, void *arg)
 {
+    (void)arg;
     reset_count_write(0);
+    tal_sw_timer_delete(timer_id);
     PR_DEBUG("reset cnt clear!");
 }
 
@@ -78,10 +89,13 @@ static OPERATE_RET __reset_netconfig_clear(void *data)
 
 int reset_netconfig_check(void)
 {
-    int rt;
     uint8_t rst_cnt = 0;
 
-    TUYA_CALL_ERR_LOG(reset_count_read(&rst_cnt));
+    int rt = reset_count_read(&rst_cnt);
+    if (OPRT_OK != rt) {
+        PR_ERR("Failed to read reset counter, ret=%d", rt);
+        return rt;
+    }
     if (rst_cnt < RESET_NETCNT_MAX) {
         return OPRT_OK;
     }
@@ -96,16 +110,36 @@ int reset_netconfig_check(void)
 
 int reset_netconfig_start(void)
 {
-    int rt = OPRT_OK;
     uint8_t rst_cnt = 0;
 
-    TUYA_CALL_ERR_LOG(reset_count_read(&rst_cnt));
-    TUYA_CALL_ERR_LOG(reset_count_write(++rst_cnt));
+    int rt = reset_count_read(&rst_cnt);
+    if (OPRT_OK != rt) {
+        PR_ERR("Failed to read reset counter, ret=%d", rt);
+        return rt;
+    }
+    if (rst_cnt < RESET_NETCNT_MAX) {
+        rst_cnt++;
+    }
+
+    rt = reset_count_write(rst_cnt);
+    if (OPRT_OK != rt) {
+        PR_ERR("Failed to write reset counter, ret=%d", rt);
+        return rt;
+    }
 
     PR_DEBUG("start reset cnt clear timer!!!!!");
-    TIMER_ID rst_config_timer;
-    tal_sw_timer_create(reset_netconfig_timer, NULL, &rst_config_timer);
-    tal_sw_timer_start(rst_config_timer, 5000, TAL_TIMER_ONCE);
+    TIMER_ID rst_config_timer = NULL;
+    rt = tal_sw_timer_create(reset_netconfig_timer, NULL, &rst_config_timer);
+    if (OPRT_OK != rt) {
+        PR_ERR("Failed to create reset counter timer, ret=%d", rt);
+        return rt;
+    }
+    rt = tal_sw_timer_start(rst_config_timer, 5000, TAL_TIMER_ONCE);
+    if (OPRT_OK != rt) {
+        PR_ERR("Failed to start reset counter timer, ret=%d", rt);
+        tal_sw_timer_delete(rst_config_timer);
+        return rt;
+    }
 
     return OPRT_OK;
 }

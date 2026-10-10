@@ -4,7 +4,9 @@
 #include "tal_api.h"
 #include "tkl_gpio.h"
 #include "tuya_cloud_types.h"
-int light_def = 0b00000000;
+#include <string.h>
+
+static uint8_t light_state[_74HC595_LEVEL] = {0U};
 #define HC595_SCK_Low() tkl_gpio_write(SCK_GPIO_PIN, 0)  
 #define HC595_SCK_High() tkl_gpio_write(SCK_GPIO_PIN, 1) 
 #define HC595_RCK_Low() tkl_gpio_write(RCK_GPIO_PIN, 0)  
@@ -68,7 +70,11 @@ void HC595_Send_Byte(uint8_t byte)
 }
 void HC595_Send_Multi_Byte(uint8_t *data, uint16_t len)
 {
-    uint8_t i;
+    uint16_t i;
+
+    if (NULL == data && 0U < len) {
+        return;
+    }
 
     for (i = 0; i < len; i++)
     {
@@ -79,32 +85,44 @@ void HC595_Send_Multi_Byte(uint8_t *data, uint16_t len)
 
 void open_led(uint8_t byte)
 {
-    light_def |= (1 << byte);
-    HC595_Send_Byte(light_def);
-    HC595_Save();
+    uint8_t chip_index;
+    uint8_t bit_index;
+
+    if (byte >= (_74HC595_LEVEL * 8U)) {
+        return;
+    }
+
+    chip_index = (uint8_t)(byte / 8U);
+    bit_index = (uint8_t)(byte % 8U);
+    light_state[chip_index] |= (uint8_t)(1U << bit_index);
+    HC595_Send_Multi_Byte(light_state, _74HC595_LEVEL);
 }
 
 void close_led(uint8_t byte)
 {
-    light_def &= ~(1 << byte);
-    HC595_Send_Byte(light_def);
-    HC595_Save();
+    uint8_t chip_index;
+    uint8_t bit_index;
+
+    if (byte >= (_74HC595_LEVEL * 8U)) {
+        return;
+    }
+
+    chip_index = (uint8_t)(byte / 8U);
+    bit_index = (uint8_t)(byte % 8U);
+    light_state[chip_index] &= (uint8_t)~(uint8_t)(1U << bit_index);
+    HC595_Send_Multi_Byte(light_state, _74HC595_LEVEL);
 }
 
 void close_led_all()
 {
-    for (int i = 0; i < _74HC595_LEVEL * 8; i++)
-    {
-        close_led(i);
-    }
+    (void)memset(light_state, 0, sizeof(light_state));
+    HC595_Send_Multi_Byte(light_state, _74HC595_LEVEL);
 }
 
 void open_led_all()
 {
-    for (int i = 0; i < _74HC595_LEVEL * 8; i++)
-    {
-        open_led(i);
-    }
+    (void)memset(light_state, 0xFF, sizeof(light_state));
+    HC595_Send_Multi_Byte(light_state, _74HC595_LEVEL);
 }
 
 void HC595_INIT(void)
